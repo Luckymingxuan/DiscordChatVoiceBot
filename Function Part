@@ -1,0 +1,202 @@
+import discord
+from discord.ext import commands
+from openai import OpenAI
+import os
+import pygame  # 这个是语音播放器
+import time  # 计时器
+from discord.voice_client import VoiceClient # 播放音频工具
+import subprocess
+import asyncio  # 计时库
+from discord import FFmpegPCMAudio
+from discord.utils import get
+
+# 设置api key
+api_key = "sk-114514114514114514ABCDEFG"  # 将 "YOUR_API_KEY" 替换为你的实际 API 密钥
+
+# 将用户的api key 储存到环境变量里面
+client = OpenAI(api_key=api_key)
+
+# 提示用户可以输入
+print("_____You can ask ChatGPT now_____")
+
+intents = discord.Intents.all()  # 启用所有的Intents(权限)
+bot = commands.Bot(command_prefix='!', intents=intents)
+bot.GPT_voice_online = False  # 添加检查GPT是否在语音频道的变量
+
+voice_channel_id_LUCKY = 113735**********  # 语音频道ID
+Word_channel_id_LUCKY = 11373**********  # 文本频道ID
+
+
+@bot.event
+async def on_ready():
+    print(f'We have logged in as {bot.user}')
+
+
+async def join_voice(ctx):
+    # 获取您希望机器人加入的语音频道
+    voice_channel = bot.get_channel(voice_channel_id_LUCKY)  # 语音频道ID
+    if voice_channel is not None:
+        if ctx.author.voice and ctx.author.voice.channel == voice_channel:
+            if not bot.voice_clients:
+                await voice_channel.connect()
+                print('Joined voice channel.')
+        else:
+            print('User is not in the specified voice channel.')
+    else:
+        print('Couldn\'t find voice channel.')
+
+
+@bot.command()
+async def join(ctx):  # 当用户输入完join机器人加入
+    voice_channel = bot.get_channel(voice_channel_id_LUCKY)  # 语音频道ID
+    if voice_channel is not None:
+        if ctx.author.voice:
+            if not bot.voice_clients:
+                await voice_channel.connect()
+                await ctx.send('已经加入语音频道。')
+                bot.GPT_voice_online = True  # 设置状态为 True
+            else:
+                await ctx.send('机器人已经在语音频道中。')
+        else:
+            await ctx.send('你需要先加入语音频道。')
+    else:
+        await ctx.send('找不到语音频道。')
+
+
+@bot.command()
+async def leave(ctx):  # 当用户输入完leave机器人离开
+    if bot.voice_clients:
+        await bot.voice_clients[0].disconnect()
+        await ctx.send('已经离开语音频道。')
+        bot.GPT_voice_online = False  # 设置状态为 False
+
+
+@bot.event
+async def on_voice_state_update(member, before, after):  # 当机器人检测到用户退出，自己也自动退出
+    if before.channel is not None and after.channel is None:
+        if bot.voice_clients:
+            await bot.voice_clients[0].disconnect()
+            text_channel = bot.get_channel(Word_channel_id_LUCKY)  # 文本频道ID
+            await text_channel.send('已经离开语音频道。')
+            bot.GPT_voice_online = False  # 设置状态为 False
+
+
+async def play_audio(ctx, filename):
+    voice_channel = get(bot.voice_clients, guild=ctx.guild)
+    if voice_channel is not None:  # 检查是否成功获取到了语音频道
+        audio_source = FFmpegPCMAudio(executable="ffmpeg", source=filename)  # 使用FFmpeg工具将音频文件转换为PCM音频
+        if not voice_channel.is_playing():  # 如果语音频道当前没有播放音频，那么就开始播放
+            voice_channel.play(audio_source, after=None)  # 在语音频道中播放音频
+        counter = 0
+        while voice_channel is not None and voice_channel.is_playing():  # 检测是否在播放
+            await asyncio.sleep(1)
+            counter += 1
+            print(counter)
+
+
+async def ChatGPT_Voice(channel, message, ChatGPT_reply):
+    if channel is not None and ChatGPT_reply is not None:
+        await channel.send(ChatGPT_reply)  # 在这里发送回复
+
+        # 这里将 ChatGPT 的回复转成语音
+        response = client.audio.speech.create(
+            model="tts-1",
+            voice="alloy",
+            input=ChatGPT_reply,  # 这里将变量发送
+        )
+
+        # 使用新的方法来保存音频——改进版本直接用变量
+        with open("output.mp3", "wb") as f:
+            f.write(response.content)
+
+        # 播放音频
+        ctx = await bot.get_context(message)
+
+        # 如果 bot 在语音频道，先离开
+        if bot.voice_clients:
+            await bot.voice_clients[0].disconnect()
+
+        # 等待音频文件准备完成
+        while not os.path.isfile("output.mp3"):
+            await asyncio.sleep(1)
+
+        # 重新加入固定语音频道
+        voice_channel = bot.get_channel(voice_channel_id_LUCKY)  # 语音频道ID
+        if voice_channel is not None:
+            if not bot.voice_clients:
+                await voice_channel.connect()
+
+        bot.GPT_voice_online = True  # 设置状态为 True
+
+        # 播放音频
+        await play_audio(ctx, "output.mp3")
+
+
+async def ChatGPT_Message(message):
+    if message.channel.id == Word_channel_id_LUCKY:  # 文本频道ID
+        if message.content.startswith('!GPT'):
+
+            # 如果机器人已经加入了语音频道，则不再执行
+            if bot.voice_clients:
+                return
+
+            # 获取上下文信息
+            ctx = await bot.get_context(message)
+
+            # 调用 join_voice 函数，并传递上下文信息作为参数
+            await join_voice(ctx)
+
+            content_after_command = message.content[4:]  # 从'!GPT'后面的内容开始
+            print(content_after_command)  # 打印出来，或者你可以选择存储到数据库或其他地方
+
+            # 提取用户输入信息
+            user_tipe = content_after_command
+
+            # 发送信息给 ChatGPT
+            completion = client.chat.completions.create(
+                model="gpt-4-turbo-preview",
+                messages=[
+                    {"role": "system", "content": "You are a helpful assistant."},
+                    {"role": "user", "content": user_tipe}
+                ]
+            )
+
+            # 提取 ChatGPT 的回复
+            ChatGPT_reply = str(completion.choices[0].message.content)  # 这里将ChatGPT_reply变量设置为'ChatGPT'回复
+            print(f"ChatGPT:'{ChatGPT_reply}'")
+
+            return message.channel, ChatGPT_reply  # 返回channel和回复
+
+    return None, None  # 默认返回值
+
+
+@bot.event
+async def on_message(message):  # 这里用于发送和处理语音转文字
+    if message.author == bot.user:   # 防止 bot 对自己的消息做出反应
+        return
+
+    await bot.process_commands(message)
+
+    channel, ChatGPT_reply = await ChatGPT_Message(message)  # 发送GPT信息到discord
+
+    if channel is None:  # 如果 channel 是 None，就返回
+        return
+
+    if bot.GPT_voice_online:  # 检查状态，如果True，那么运行文字转语音
+        await ChatGPT_Voice(channel, message, ChatGPT_reply)
+    else:  # 如果 bot.GPT_voice_online 为 False
+        await channel.send(ChatGPT_reply)  # 发送文本消息
+
+
+@bot.event
+async def on_command_error(ctx, error):  # 如果CommandNotFound出现无法检测指令问题，自动跳过
+    if isinstance(error, commands.CommandNotFound):
+        return
+    raise error
+
+
+@bot.command()
+async def play(ctx):  # 这段代码用于检测是否音频播放器有问题
+    await play_audio(ctx, "output.mp3")
+
+bot.run('114514114514ABCDEFG')  # 机器人token
